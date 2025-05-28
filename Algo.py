@@ -1,9 +1,10 @@
 import math
-import sys
 import mysql.connector
 from heapq import heappush, heappop
+import tkinter as tk
+from tkinter import ttk, messagebox
 
-# City coordinates dictionary
+# --- Coordinates dictionary ---
 coords = {
     "Ahmedabad": (23.0225, 72.5714),
     "Amritsar": (31.6340, 74.8723),
@@ -26,11 +27,10 @@ coords = {
     "Dehradun": (30.3165, 78.0322)
 }
 
-# Connect to MySQL database
+# --- Database functions ---
 def get_flights_from_db():
     connection = mysql.connector.connect(
         host='localhost',
-        port=3306,
         user='root',
         password='srishtihello',
         database='SBPsystem'
@@ -42,15 +42,10 @@ def get_flights_from_db():
     connection.close()
     return flights
 
-# Define blocked routes (no-fly zones or bad weather)
 def get_blocked_routes():
-    # Format: list of (source, destination)
-    return [
-        ("Delhi", "Patna"),           # Example no-fly zone
-        ("Mumbai", "Hyderabad")       # Example bad weather
-    ]
+    return [("Delhi", "Patna"), ("Mumbai", "Hyderabad")]
 
-# Haversine distance between coordinates
+# --- Graph and distance functions ---
 def haversine(c1, c2):
     R = 6371
     lat1, lon1 = c1
@@ -59,26 +54,21 @@ def haversine(c1, c2):
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-# Build graph excluding blocked routes
 def build_graph(flights):
     blocked = set(get_blocked_routes())
     graph = {}
     for f_id, f_num, src, dst in flights:
-        if src in coords and dst in coords:
-            if (src, dst) in blocked or (dst, src) in blocked:
-                continue  # Skip blocked routes
+        if src in coords and dst in coords and (src, dst) not in blocked and (dst, src) not in blocked:
             dist = haversine(coords[src], coords[dst])
             graph.setdefault(src, []).append((dst, dist))
             graph.setdefault(dst, []).append((src, dist))
     return graph
 
-# Dijkstra's algorithm
+# --- Dijkstra & A* ---
 def dijkstra(graph, start, goal):
-    queue = [(0, start, [])]
-    visited = set()
+    queue, visited = [(0, start, [])], set()
     while queue:
         dist, city, path = heappop(queue)
         if city in visited:
@@ -92,75 +82,85 @@ def dijkstra(graph, start, goal):
                 heappush(queue, (dist + weight, neighbor, path))
     return float('inf'), []
 
-# A* algorithm
 def a_star(graph, start, goal):
-    queue = [(0, 0, start, [])]
-    visited = set()
+    queue, visited = [(0, 0, start, [])], set()
     while queue:
-        f_score, g_score, city, path = heappop(queue)
+        f, g, city, path = heappop(queue)
         if city in visited:
             continue
         path = path + [city]
         if city == goal:
-            return g_score, path
+            return g, path
         visited.add(city)
         for neighbor, dist in graph.get(city, []):
             if neighbor not in visited:
                 h = haversine(coords[neighbor], coords[goal])
-                heappush(queue, (g_score + dist + h, g_score + dist, neighbor, path))
+                heappush(queue, (g + dist + h, g + dist, neighbor, path))
     return float('inf'), []
 
-# Mark and print flights in the shortest path
-def mark_shortest_flights(flights, shortest_path):
-    path_edges = set((shortest_path[i], shortest_path[i+1]) for i in range(len(shortest_path) - 1))
+# --- Mark flights ---
+def mark_flights(flights, path):
+    edges = set((path[i], path[i+1]) for i in range(len(path)-1))
     blocked = set(get_blocked_routes())
-    
-    for flight_id, flight_num, src, dst in flights:
+    status = []
+    for f_id, f_num, src, dst in flights:
         if (src, dst) in blocked or (dst, src) in blocked:
-            print(f"{flight_num} from {src} to {dst}  blocked (obstacle)")
-        elif (src, dst) in path_edges or (dst, src) in path_edges:
-            print(f"{flight_num} from {src} to {dst}  shortest")
+            status.append(f"{f_num}: {src} → {dst}  ❌ BLOCKED")
+        elif (src, dst) in edges or (dst, src) in edges:
+            status.append(f"{f_num}: {src} → {dst}  ✅ SHORTEST")
         else:
-            print(f"{flight_num} from {src} to {dst}")
+            status.append(f"{f_num}: {src} → {dst}")
+    return "\n".join(status)
 
-# Main logic
-def main():
+# --- GUI Setup ---
+def find_paths():
+    src = source_var.get()
+    dest = dest_var.get()
+    if src == dest:
+        messagebox.showerror("Error", "Source and destination cannot be the same.")
+        return
+    if src not in coords or dest not in coords:
+        messagebox.showerror("Error", "Invalid cities selected.")
+        return
+
     flights = get_flights_from_db()
     graph = build_graph(flights)
 
-    src = input("Enter source city: ").strip()
-    dest = input("Enter destination city: ").strip()
+    d_dist, d_path = dijkstra(graph, src, dest)
+    a_dist, a_path = a_star(graph, src, dest)
 
-    if src not in coords or dest not in coords:
-        print("Error: Source or destination city coordinates not found.")
+    if d_dist == float('inf'):
+        messagebox.showinfo("No Path", f"No route found from {src} to {dest}")
         return
 
-    dist, path = dijkstra(graph, src, dest)
-    if dist == float('inf'):
-        print(f"No path found from {src} to {dest} using Dijkstra.")
-        return
+    dijkstra_result.set(f"Dijkstra:\n{d_dist:.2f} km\nPath: {' → '.join(d_path)}")
+    a_star_result.set(f"A*:\n{a_dist:.2f} km\nPath: {' → '.join(a_path)}")
+    flight_output.delete(1.0, tk.END)
+    flight_output.insert(tk.END, mark_flights(flights, d_path))
 
-    print(f"\nShortest distance by Dijkstra: {dist:.2f} km")
-    print("Shortest path:", " -> ".join(path))
-    print("\nFlights status:")
-    mark_shortest_flights(flights, path)
+# GUI Window
+root = tk.Tk()
+root.title("Shortest Flight Path Finder")
 
-    dist_a, path_a = a_star(graph, src, dest)
-    print(f"\nShortest distance by A*: {dist_a:.2f} km")
-    print("Shortest path:", " -> ".join(path_a))
+source_var = tk.StringVar()
+dest_var = tk.StringVar()
+dijkstra_result = tk.StringVar()
+a_star_result = tk.StringVar()
 
-# Support command-line usage
-if __name__ == "__main__":
-    if len(sys.argv) >= 3:
-        src = sys.argv[1]
-        dest = sys.argv[2]
-        flights = get_flights_from_db()
-        graph = build_graph(flights)
-        dist, path = dijkstra(graph, src, dest)
-        if dist == float('inf'):
-            print(f"No path from {src} to {dest}")
-        else:
-            print(f"Shortest distance: {dist:.2f} km")
-            print(" -> ".join(path))
-    else:
-        main()
+# --- Layout ---
+tk.Label(root, text="Select Source City:").grid(row=0, column=0, padx=5, pady=5)
+ttk.Combobox(root, textvariable=source_var, values=list(coords.keys())).grid(row=0, column=1)
+
+tk.Label(root, text="Select Destination City:").grid(row=1, column=0, padx=5, pady=5)
+ttk.Combobox(root, textvariable=dest_var, values=list(coords.keys())).grid(row=1, column=1)
+
+tk.Button(root, text="Find Shortest Path", command=find_paths).grid(row=2, column=0, columnspan=2, pady=10)
+
+tk.Label(root, textvariable=dijkstra_result, justify="left", fg="blue").grid(row=3, column=0, columnspan=2, sticky="w", padx=5)
+tk.Label(root, textvariable=a_star_result, justify="left", fg="green").grid(row=4, column=0, columnspan=2, sticky="w", padx=5)
+
+tk.Label(root, text="Flights Status:").grid(row=5, column=0, columnspan=2)
+flight_output = tk.Text(root, width=70, height=15)
+flight_output.grid(row=6, column=0, columnspan=2, padx=5, pady=5)
+
+root.mainloop()
